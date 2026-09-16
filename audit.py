@@ -12,10 +12,12 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
-MAX_CAPTURE_CHARS = 10 * 1024 * 1024
+MAX_CAPTURE_BYTES = 10 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 300
 
 
@@ -73,9 +75,6 @@ def _sanitized_env() -> dict[str, str]:
         "ELECTRON_RUN_AS_NODE",
         "NODE_OPTIONS",
     }
-    # Keep Semgrep settings that represent an explicit user privacy/auth choice.
-    # Other Semgrep-specific variables are removed so the scan is driven by the
-    # plugin's explicit command line and HSA_SEMGREP_CONFIG.
     semgrep_keep = {
         key: value
         for key, value in child.items()
@@ -101,28 +100,65 @@ def _sanitized_env() -> dict[str, str]:
     return child
 
 
-def _run_process(args: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
-    try:
-        completed = subprocess.run(
-            args,
-            cwd=str(cwd),
-            env=_sanitized_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            shell=False,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ScannerProcessError(f"scanner timed out after {timeout}s") from exc
-    except OSError as exc:
-        raise ScannerProcessError(f"scanner could not be started: {exc}") from exc
+def _decode_temp_output(handle) -> str:
+    handle.seek(0)
+    return handle.read(MAX_CAPTURE_BYTES + 1).decode("utf-8", errors="replace")
 
-    if len(completed.stdout) > MAX_CAPTURE_CHARS or len(completed.stderr) > MAX_CAPTURE_CHARS:
-        raise ScannerProcessError("scanner output exceeded the 10 MiB safety limit")
-    return completed
+
+def _run_process(args: list[str], *, cwd: Path, timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run a scanner with bounded captured output and a hard timeout.
+
+    Output is written to temporary files instead of being buffered in memory.
+    While the process runs, file sizes are checked and the scanner is killed if
+    either stream exceeds the 10 MiB limit.
+    """
+
+    deadline = time.monotonic() + timeout
+
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=str(cwd),
+                env=_sanitized_env(),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                shell=False,
+            )
+        except OSError as exc:
+            raise ScannerProcessError(f"scanner could not be started: {exc}") from exc
+
+        while True:
+            returncode = process.poll()
+            stdout_size = os.fstat(stdout_file.fileno()).st_size
+            stderr_size = os.fstat(stderr_file.fileno()).st_size
+
+            if stdout_size > MAX_CAPTURE_BYTES or stderr_size > MAX_CAPTURE_BYTES:
+                process.kill()
+                process.wait()
+                raise ScannerProcessError("scanner output exceeded the 10 MiB safety limit")
+
+            if returncode is not None:
+                break
+
+            if time.monotonic() >= deadline:
+                process.kill()
+                process.wait()
+                raise ScannerProcessError(f"scanner timed out after {timeout}s")
+
+            time.sleep(0.05)
+
+        stdout_size = os.fstat(stdout_file.fileno()).st_size
+        stderr_size = os.fstat(stderr_file.fileno()).st_size
+        if stdout_size > MAX_CAPTURE_BYTES or stderr_size > MAX_CAPTURE_BYTES:
+            raise ScannerProcessError("scanner output exceeded the 10 MiB safety limit")
+
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=returncode,
+            stdout=_decode_temp_output(stdout_file),
+            stderr=_decode_temp_output(stderr_file),
+        )
 
 
 def _json_or_none(text: str) -> Any | None:
@@ -257,6 +293,18 @@ def _scan_osv(executable: str, workspace: Path, timeout: int) -> dict[str, Any]:
     }
 
 
+def _semgrep_error_summary(errors: list[Any]) -> str:
+    summaries = []
+    for item in errors[:5]:
+        if isinstance(item, dict):
+            message = item.get("message") or item.get("type") or item.get("code")
+            summaries.append(str(message or "unspecified Semgrep error"))
+        else:
+            summaries.append(str(item))
+    suffix = "" if len(errors) <= 5 else f" (+{len(errors) - 5} more)"
+    return "; ".join(summaries)[:1800] + suffix
+
+
 def _scan_semgrep(executable: str, workspace: Path, timeout: int) -> dict[str, Any]:
     config = os.environ.get("HSA_SEMGREP_CONFIG", "auto").strip() or "auto"
     completed = _run_process(
@@ -266,7 +314,11 @@ def _scan_semgrep(executable: str, workspace: Path, timeout: int) -> dict[str, A
     )
 
     parsed = _json_or_none(completed.stdout)
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+    if (
+        not isinstance(parsed, dict)
+        or not isinstance(parsed.get("results"), list)
+        or ("errors" in parsed and not isinstance(parsed.get("errors"), list))
+    ):
         return {
             "status": "UNRESOLVED",
             "findings": [],
@@ -288,6 +340,23 @@ def _scan_semgrep(executable: str, workspace: Path, timeout: int) -> dict[str, A
                 "severity": extra.get("severity"),
             }
         )
+
+    errors = parsed.get("errors") or []
+    if errors:
+        error_text = "Semgrep reported analysis errors: " + _semgrep_error_summary(errors)
+        if findings:
+            return {
+                "status": "FAIL",
+                "findings": findings,
+                "coverage_incomplete": True,
+                "error": error_text,
+            }
+        return {
+            "status": "UNRESOLVED",
+            "findings": [],
+            "coverage_incomplete": True,
+            "error": error_text,
+        }
 
     if findings:
         return {"status": "FAIL", "findings": findings}
@@ -386,10 +455,14 @@ def run_security_audit(workspace: str) -> dict[str, Any]:
         scanners["semgrep"] = {"status": "UNRESOLVED", "findings": [], "error": str(exc)}
 
     overall = _overall(scanners)
+    coverage_incomplete = any(
+        result.get("status") == "UNRESOLVED" or result.get("coverage_incomplete") is True
+        for result in scanners.values()
+    )
     return {
         "type": "SECURITY_AUDIT",
         "overall": overall,
-        "coverage_incomplete": any(v.get("status") == "UNRESOLVED" for v in scanners.values()),
+        "coverage_incomplete": coverage_incomplete,
         "workspace": str(target),
         "scanners": scanners,
         "summary": _summary(target, scanners),

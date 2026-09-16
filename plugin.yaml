@@ -1,3 +1,18 @@
+manifest_version: 2
+api_version: 1
 name: hermes-security-audit
-version: "1.0.0"
+version: "1.0.1"
 description: Approval-gated local security audit tool for Hermes Agent using Gitleaks, OSV-Scanner, and Semgrep CE.
+author: dafka007
+license: MIT
+homepage: https://github.com/dafka007/hermes-security-audit
+tags:
+  - security
+  - gitleaks
+  - osv-scanner
+  - semgrep
+  - static-analysis
+provides_tools:
+  - security_audit
+provides_hooks:
+  - pre_tool_call

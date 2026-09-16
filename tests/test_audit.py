@@ -115,6 +115,58 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(result["coverage_incomplete"])
         self.assertEqual(result["scanners"]["semgrep"]["status"], "UNRESOLVED")
 
+    def test_semgrep_analysis_errors_are_unresolved(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(
+            audit, "_resolve_executable", side_effect=["gitleaks", "osv-scanner", "semgrep"]
+        ), patch.object(audit, "_run_process") as run:
+            def fake(args, **kwargs):
+                if args[0] == "gitleaks":
+                    return completed(args, stdout="[]")
+                if args[0] == "osv-scanner":
+                    return completed(args, code=128)
+                return completed(
+                    args,
+                    stdout=json.dumps(
+                        {"results": [], "errors": [{"message": "parse failure"}]}
+                    ),
+                )
+
+            run.side_effect = fake
+            result = audit.run_security_audit(td)
+
+        self.assertEqual(result["overall"], "UNRESOLVED")
+        self.assertTrue(result["coverage_incomplete"])
+        self.assertIn("parse failure", result["scanners"]["semgrep"]["error"])
+
+    def test_semgrep_findings_with_analysis_errors_fail_but_mark_incomplete(self):
+        semgrep_json = {
+            "results": [
+                {
+                    "check_id": "demo.rule",
+                    "path": "demo.py",
+                    "start": {"line": 1},
+                    "extra": {"message": "demo", "severity": "WARNING"},
+                }
+            ],
+            "errors": [{"message": "partial parse failure"}],
+        }
+        with tempfile.TemporaryDirectory() as td, patch.object(
+            audit, "_resolve_executable", side_effect=["gitleaks", "osv-scanner", "semgrep"]
+        ), patch.object(audit, "_run_process") as run:
+            def fake(args, **kwargs):
+                if args[0] == "gitleaks":
+                    return completed(args, stdout="[]")
+                if args[0] == "osv-scanner":
+                    return completed(args, code=128)
+                return completed(args, code=1, stdout=json.dumps(semgrep_json))
+
+            run.side_effect = fake
+            result = audit.run_security_audit(td)
+
+        self.assertEqual(result["overall"], "FAIL")
+        self.assertTrue(result["coverage_incomplete"])
+        self.assertEqual(result["scanners"]["semgrep"]["status"], "FAIL")
+
     def test_missing_scanner_is_unresolved(self):
         with tempfile.TemporaryDirectory() as td, patch.object(
             audit, "_resolve_executable", side_effect=[None, "osv-scanner", "semgrep"]
@@ -129,7 +181,6 @@ class AuditTests(unittest.TestCase):
 
         self.assertEqual(result["overall"], "UNRESOLVED")
         self.assertEqual(result["scanners"]["gitleaks"]["status"], "UNRESOLVED")
-
 
     def test_sanitized_env_strips_host_runtime_but_preserves_semgrep_privacy_choice(self):
         fake_env = {
@@ -153,6 +204,15 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(child["SEMGREP_APP_TOKEN"], "token-value")
         self.assertEqual(child["NO_COLOR"], "1")
 
+    def test_run_process_stops_oversized_output(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(audit, "MAX_CAPTURE_BYTES", 1024):
+            with self.assertRaises(audit.ScannerProcessError):
+                audit._run_process(
+                    [sys.executable, "-c", "import sys; sys.stdout.write('x' * 4096)"],
+                    cwd=Path(td),
+                    timeout=5,
+                )
+
     def test_missing_workspace_is_blocked(self):
         result = audit.run_security_audit(str(ROOT / "definitely-not-a-real-directory"))
         self.assertEqual(result["overall"], "BLOCKED")
@@ -170,6 +230,23 @@ class AuditTests(unittest.TestCase):
         sys.modules["hermes_security_audit_approval"] = module
         spec.loader.exec_module(module)
         self.assertIsNone(module._approval_gate("terminal", {"workspace": "C:/demo"}))
+
+    def test_approval_hook_escapes_control_characters(self):
+        spec = importlib.util.spec_from_file_location(
+            "hermes_security_audit_approval_escape",
+            ROOT / "__init__.py",
+            submodule_search_locations=[str(ROOT)],
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        sys.modules["hermes_security_audit_approval_escape"] = module
+        spec.loader.exec_module(module)
+
+        directive = module._approval_gate(
+            "security_audit", {"workspace": "demo\nspoofed approval line"}
+        )
+        self.assertNotIn("\nspoofed approval line", directive["message"])
+        self.assertIn("\\nspoofed approval line", directive["message"])
 
     def test_plugin_registers_one_tool_and_one_hook(self):
         spec = importlib.util.spec_from_file_location(
