@@ -1,0 +1,3 @@
+name: hermes-security-audit
+version: "1.0.0"
+description: Approval-gated local security audit tool for Hermes Agent using Gitleaks, OSV-Scanner, and Semgrep CE.
