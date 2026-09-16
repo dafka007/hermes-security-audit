@@ -4,7 +4,7 @@ A small security-audit plugin for [Hermes Agent](https://github.com/NousResearch
 
 It gives Hermes one approval-gated `security_audit` tool for local **secret scanning**, **dependency vulnerability scanning**, and **static analysis** using:
 
-- **Gitleaks** for leaked secrets and credentials
+- **Gitleaks** for leaked secrets and credentials in the current workspace tree
 - **OSV-Scanner** for vulnerable dependencies
 - **Semgrep CE** for static-analysis findings
 
@@ -17,8 +17,9 @@ The plugin is intentionally pretty boring about security:
 - Hermes asks for **human approval before every audit**.
 - Scanner commands are launched with `shell=False`.
 - The plugin does not edit the project being scanned.
-- Missing tools, timeouts, malformed output, and unexpected scanner failures are reported as `UNRESOLVED`, not quietly turned into a pass.
+- Missing tools, timeouts, malformed output, partial Semgrep analysis errors, and unexpected scanner failures are reported as incomplete coverage instead of quietly becoming a pass.
 - Gitleaks runs with full redaction, and secret values are never copied into the normalized result.
+- Scanner output is bounded while the process is running instead of being allowed to grow without limit in memory.
 - Child processes get a cleaned-up environment so Hermes Desktop / Python / terminal variables do not interfere with scanner JSON output.
 
 The final result uses `PASS`, `FAIL`, `NOT_APPLICABLE`, `UNRESOLVED`, or `BLOCKED`, so the agent can tell the difference between "clean" and "I could not verify this."
@@ -57,9 +58,19 @@ You do **not** need to download the repository yourself when using this command;
 
 Restart Hermes after installation.
 
+### Reproducible install
+
+Hermes also supports pinning a custom plugin to one exact immutable Git commit. Replace `<FULL_COMMIT_SHA>` with the full 40-character commit SHA from the release you want:
+
+```bash
+hermes plugins install dafka007/hermes-security-audit --enable --ref <FULL_COMMIT_SHA>
+```
+
+Hermes intentionally requires a full commit SHA for `--ref`; tags, branches, and abbreviated SHAs are not accepted for pinned installs.
+
 ### Manual download
 
-If you prefer not to use the installer command, GitHub's **Code → Download ZIP** option works too.
+If you prefer not to use the installer command, GitHub's **Releases** page provides source ZIP and TAR.GZ downloads. The repository's **Code → Download ZIP** option also works for the current branch.
 
 Extract the repository and place the folder at:
 
@@ -114,6 +125,10 @@ A clean result looks roughly like this:
 
 OSV-Scanner exit code `128` is treated as `NOT_APPLICABLE`; OSV documents that code as "no packages found."
 
+### Gitleaks scope
+
+The plugin currently uses Gitleaks' `dir` scan mode. That checks the files in the workspace tree being audited; it does **not** scan the repository's full Git commit history. Historical secret scanning may be added separately in the future so it can have its own scope and performance expectations.
+
 ## Configuration
 
 Normally the plugin just uses the scanner executables found on `PATH`. These environment variables are available when you need something different:
@@ -145,23 +160,24 @@ If you want Semgrep to use only local rules, point `HSA_SEMGREP_CONFIG` at a loc
 ## Result meanings
 
 - **PASS** — scanner ran successfully and found nothing.
-- **FAIL** — scanner ran successfully and reported one or more findings.
+- **FAIL** — scanner ran and reported one or more findings.
 - **NOT_APPLICABLE** — there was nothing relevant for that scanner to inspect.
-- **UNRESOLVED** — coverage could not be trusted (missing scanner, timeout, malformed output, unexpected scanner error, etc.).
+- **UNRESOLVED** — coverage could not be trusted (missing scanner, timeout, malformed output, incomplete scanner analysis, unexpected scanner error, etc.).
 - **BLOCKED** — the workspace itself could not be validated.
 
-Overall precedence is `FAIL` → `UNRESOLVED` → `PASS`. A `NOT_APPLICABLE` result does not make the whole audit incomplete by itself.
+Overall precedence is `FAIL` → `UNRESOLVED` → `PASS`. A `FAIL` result can still set `coverage_incomplete: true` when a scanner found real findings but also reported partial analysis errors.
 
 ## What v1 does not do
 
 - It does not install or update scanners for you.
 - It does not auto-fix findings.
+- It does not scan full Git history with Gitleaks.
 - It does not do ZAP/DAST scanning. Active web scanning has a different safety/authorization model and should be an explicit feature if it is added later.
 - It does not replace Hermes' own dependency/supply-chain security commands.
 
 ## Development
 
-The tests do not need the scanners installed; scanner processes are mocked.
+The tests do not need the scanners installed; scanner processes are mocked except for one small bounded-output subprocess regression test.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -169,10 +185,6 @@ python -m compileall -q .
 ```
 
 Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Search terms / project scope
-
-This project is a Hermes Agent security plugin for secret scanning, vulnerability scanning, dependency auditing, and static analysis with Gitleaks, OSV-Scanner, and Semgrep CE. It is intended for local coding-agent and AI coding-agent security workflows where scans should be explicit and human-approved.
 
 ## License
 
