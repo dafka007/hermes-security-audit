@@ -2,7 +2,7 @@
 
 A small security-audit plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-It adds one tool, `security_audit`, which runs three local scanners against a workspace and gives Hermes one combined result:
+It gives Hermes one approval-gated `security_audit` tool for local **secret scanning**, **dependency vulnerability scanning**, and **static analysis** using:
 
 - **Gitleaks** for leaked secrets and credentials
 - **OSV-Scanner** for vulnerable dependencies
@@ -45,19 +45,35 @@ There are no third-party Python dependencies in the plugin itself, and Hermes do
 
 ## Install
 
-Install straight from GitHub:
+### Recommended: let Hermes install it from GitHub
+
+Run this in **PowerShell, Command Prompt, Windows Terminal, or a normal macOS/Linux shell**—anywhere the `hermes` command works:
 
 ```bash
 hermes plugins install dafka007/hermes-security-audit --enable
 ```
 
-Or copy/clone the repo into:
+You do **not** need to download the repository yourself when using this command; Hermes fetches the plugin from GitHub and installs it into its plugin area.
+
+Restart Hermes after installation.
+
+### Manual download
+
+If you prefer not to use the installer command, GitHub's **Code → Download ZIP** option works too.
+
+Extract the repository and place the folder at:
 
 ```text
 ~/.hermes/plugins/hermes-security-audit/
 ```
 
-Then enable it and restart Hermes:
+On a normal Windows setup, `~` means your user profile folder, so that is typically equivalent to:
+
+```text
+%USERPROFILE%\.hermes\plugins\hermes-security-audit\
+```
+
+Then enable the plugin and restart Hermes:
 
 ```bash
 hermes plugins enable hermes-security-audit
@@ -153,6 +169,10 @@ python -m compileall -q .
 ```
 
 Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Search terms / project scope
+
+This project is a Hermes Agent security plugin for secret scanning, vulnerability scanning, dependency auditing, and static analysis with Gitleaks, OSV-Scanner, and Semgrep CE. It is intended for local coding-agent and AI coding-agent security workflows where scans should be explicit and human-approved.
 
 ## License
 
