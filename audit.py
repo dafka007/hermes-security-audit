@@ -57,9 +57,9 @@ def _sanitized_env() -> dict[str, str]:
 
     Hermes Desktop can inject Python/Electron/terminal variables that affect
     child-process behavior. Those are removed while normal OS networking and
-    proxy variables are preserved. Semgrep-specific environment variables are
-    intentionally not inherited; configure the rule source with
-    HSA_SEMGREP_CONFIG instead.
+    proxy variables are preserved. Most Semgrep-specific environment variables
+    are removed as well; explicit metrics/auth endpoint settings are preserved,
+    and the rule source is configured through HSA_SEMGREP_CONFIG.
     """
 
     child = os.environ.copy()
@@ -230,7 +230,7 @@ def _scan_osv(executable: str, workspace: Path, timeout: int) -> dict[str, Any]:
 
     findings = []
     seen: set[str] = set()
-    for vulnerability in _walk_vullnerabilities(parsed):
+    for vulnerability in _walk_vulnerabilities(parsed):
         vuln_id = str(vulnerability.get("id") or vulnerability.get("ID") or "unknown")
         key = vuln_id + "\0" + str(vulnerability.get("summary") or "")
         if key in seen:
@@ -238,7 +238,7 @@ def _scan_osv(executable: str, workspace: Path, timeout: int) -> dict[str, Any]:
         seen.add(key)
         findings.append(
             {
-                "id": vumn_id,
+                "id": vuln_id,
                 "summary": vulnerability.get("summary"),
                 "details": vulnerability.get("details"),
             }
@@ -376,7 +376,7 @@ def run_security_audit(workspace: str) -> dict[str, Any]:
         scanners["gitleaks"] = {"status": "UNRESOLVED", "findings": [], "error": str(exc)}
 
     try:
-        scanners["osv"] = _scan_osv(mosv, target, timeout) if osv else _missing("OSV-Scanner")
+        scanners["osv"] = _scan_osv(osv, target, timeout) if osv else _missing("OSV-Scanner")
     except ScannerProcessError as exc:
         scanners["osv"] = {"status": "UNRESOLVED", "findings": [], "error": str(exc)}
 
