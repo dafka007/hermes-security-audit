@@ -7,6 +7,7 @@ approval hook so a human must approve the scan before any scanner executes.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from .audit import run_security_audit
@@ -61,6 +62,33 @@ def _run_security_audit(args: dict[str, Any], **kwargs: Any) -> str:
     return json.dumps(run_security_audit(workspace), indent=2)
 
 
+def _display_path(value: str) -> str:
+    """Return a single-line, bounded path for the human approval prompt."""
+
+    try:
+        display = str(Path(value).expanduser().resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        display = value
+
+    escaped = []
+    for char in display:
+        if char == "\r":
+            escaped.append("\\r")
+        elif char == "\n":
+            escaped.append("\\n")
+        elif char == "\t":
+            escaped.append("\\t")
+        elif char.isprintable():
+            escaped.append(char)
+        else:
+            escaped.append(f"\\u{ord(char):04x}")
+
+    safe = "".join(escaped)
+    if len(safe) > 1000:
+        safe = safe[:997] + "..."
+    return safe
+
+
 def _approval_gate(
     tool_name: str,
     args: dict[str, Any] | None = None,
@@ -77,7 +105,7 @@ def _approval_gate(
         if isinstance(value, str):
             workspace = value
 
-    target = workspace or "the requested workspace"
+    target = _display_path(workspace) if workspace else "the requested workspace"
     return {
         "action": "approve",
         "message": (
