@@ -28,7 +28,7 @@ The final result uses `PASS`, `FAIL`, `NOT_APPLICABLE`, `UNRESOLVED`, or `BLOCKE
 The first real-world test setup was:
 
 - Hermes Agent `v2026.9.14` / Agent `v0.21.3`
-- Windows 10
+- Windows 11
 - Hermes' Python 3.11 runtime
 
 The code itself is platform-neutral, and the test suite runs on Windows and Linux.
