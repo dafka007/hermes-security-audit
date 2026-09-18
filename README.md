@@ -147,6 +147,60 @@ For example, to use a local Semgrep rules directory on Windows:
 $env:HSA_SEMGREP_CONFIG = "C:\security\semgrep-rules"
 ```
 
+### Semgrep CE rule compatibility
+
+This plugin runs **Semgrep Community Edition (CE)**. If you point `HSA_SEMGREP_CONFIG` at a local checkout or bundle of Semgrep rules, make sure that ruleset only contains languages/features your Semgrep CE installation can analyze.
+
+A concrete example is **Apex**: Semgrep documents Apex as a Pro Engine language. A local rules tree that includes a top-level `apex` rules directory can therefore make a CE scan report analysis errors. The plugin intentionally treats those errors as incomplete coverage (`UNRESOLVED`) instead of incorrectly reporting a clean `PASS`.
+
+If you are using the default `HSA_SEMGREP_CONFIG=auto`, you normally do not need this workaround. It is mainly for users who keep their own local rules checkout.
+
+Do **not** delete or edit your original rules tree just to make it CE-compatible. Create a separate filtered copy and point `HSA_SEMGREP_CONFIG` at that copy.
+
+#### Windows / PowerShell
+
+The example below copies a local rules tree while excluding only the top-level `apex` directory:
+
+```powershell
+$source = "C:\security\semgrep-rules"
+$dest   = "C:\security\semgrep-rules-ce"
+
+if (Test-Path $dest) {
+    Remove-Item -Recurse -Force $dest
+}
+
+New-Item -ItemType Directory -Force $dest | Out-Null
+
+robocopy $source $dest /E /XD "$source\apex"
+if ($LASTEXITCODE -ge 8) {
+    throw "robocopy failed with exit code $LASTEXITCODE"
+}
+
+$env:HSA_SEMGREP_CONFIG = $dest
+```
+
+`robocopy` exit codes below 8 can still mean a successful copy; 8 or higher indicates a failure.
+
+#### macOS / Linux
+
+```bash
+source_dir="$HOME/security/semgrep-rules"
+dest_dir="$HOME/security/semgrep-rules-ce"
+
+rm -rf "$dest_dir"
+mkdir -p "$dest_dir"
+rsync -a --exclude='/apex/' "$source_dir/" "$dest_dir/"
+
+export HSA_SEMGREP_CONFIG="$dest_dir"
+```
+
+Then run the audit again. A compatible scan should report Semgrep as `PASS` or `FAIL` based on findings, rather than `UNRESOLVED` because of unsupported-rule analysis errors.
+
+This workaround is intentionally narrow: exclude only rules you have confirmed are incompatible with the Semgrep CE engine you are running. Semgrep's current product documentation lists Apex among the languages provided by Pro Engine:
+
+- [Semgrep Pro Engine](https://semgrep.dev/products/pro-engine/)
+- [Semgrep Community Edition](https://semgrep.dev/products/community-edition/)
+
 ### Network/privacy note
 
 The plugin itself does not upload your source code, but the scanners have their own behavior:
